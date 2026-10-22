@@ -38,6 +38,88 @@ userInput.addEventListener("keydown", function (e) {
 sendButton.addEventListener("click", sendMessage);
 
 /**
+ * Check whether user is near the bottom of the chat.
+ * If so, we auto-scroll on updates. Otherwise we leave them alone.
+ */
+function isNearBottom() {
+	const threshold = 80;
+	return (
+		chatMessages.scrollHeight -
+			chatMessages.scrollTop -
+			chatMessages.clientHeight <
+		threshold
+	);
+}
+
+function scrollToBottom(force = false) {
+	if (force || isNearBottom()) {
+		chatMessages.scrollTop = chatMessages.scrollHeight;
+	}
+}
+
+/**
+ * Escape HTML so user/LLM content can't break the DOM or run scripts.
+ */
+function escapeHtml(str) {
+	return str
+		.replace(/&/g, "&amp;")
+		.replace(/</g, "&lt;")
+		.replace(/>/g, "&gt;")
+		.replace(/"/g, "&quot;")
+		.replace(/'/g, "&#39;");
+}
+
+/**
+ * Very small markdown-lite renderer for assistant messages:
+ * code fences, inline code, bold, italic, and line breaks.
+ * Returns HTML-safe output.
+ */
+function renderMarkdownLite(text) {
+	// Split on triple-backtick code blocks first
+	const parts = [];
+	const codeBlockRegex = /```(\w*)\n?([\s\S]*?)```/g;
+	let lastIndex = 0;
+	let match;
+
+	while ((match = codeBlockRegex.exec(text)) !== null) {
+		if (match.index > lastIndex) {
+			parts.push({
+				type: "text",
+				content: text.slice(lastIndex, match.index),
+			});
+		}
+		parts.push({
+			type: "code",
+			lang: match[1] || "",
+			content: match[2],
+		});
+		lastIndex = codeBlockRegex.lastIndex;
+	}
+	if (lastIndex < text.length) {
+		parts.push({ type: "text", content: text.slice(lastIndex) });
+	}
+
+	let html = "";
+	for (const part of parts) {
+		if (part.type === "code") {
+			html += `<pre><code>${escapeHtml(part.content)}</code></pre>`;
+		} else {
+			let t = escapeHtml(part.content);
+			// Inline code
+			t = t.replace(/`([^`\n]+)`/g, "<code>$1</code>");
+			// Bold
+			t = t.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+			// Italic
+			t = t.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+			// Line breaks
+			t = t.replace(/\n/g, "<br>");
+			html += t;
+		}
+	}
+	return html;
+}
+
+/**
  * Sends a message to the chat API and processes the response
  */
 async function sendMessage() {
@@ -64,16 +146,18 @@ async function sendMessage() {
 	// Add message to history
 	chatHistory.push({ role: "user", content: message });
 
+	let assistantMessageEl = null;
+	let assistantTextEl = null;
+
 	try {
 		// Create new assistant response element
-		const assistantMessageEl = document.createElement("div");
+		assistantMessageEl = document.createElement("div");
 		assistantMessageEl.className = "message assistant-message";
 		assistantMessageEl.innerHTML = "<p></p>";
 		chatMessages.appendChild(assistantMessageEl);
-		const assistantTextEl = assistantMessageEl.querySelector("p");
+		assistantTextEl = assistantMessageEl.querySelector("p");
 
-		// Scroll to bottom
-		chatMessages.scrollTop = chatMessages.scrollHeight;
+		scrollToBottom(true);
 
 		// Send request to API
 		const response = await fetch("/api/chat", {
@@ -88,7 +172,7 @@ async function sendMessage() {
 
 		// Handle errors
 		if (!response.ok) {
-			throw new Error("Failed to get response");
+			throw new Error(`Failed to get response (HTTP ${response.status})`);
 		}
 		if (!response.body) {
 			throw new Error("Response body is null");
@@ -99,54 +183,19 @@ async function sendMessage() {
 		const decoder = new TextDecoder();
 		let responseText = "";
 		let buffer = "";
+		let sawDone = false;
+
 		const flushAssistantText = () => {
-			assistantTextEl.textContent = responseText;
-			chatMessages.scrollTop = chatMessages.scrollHeight;
+			assistantTextEl.innerHTML = renderMarkdownLite(responseText);
+			scrollToBottom();
 		};
 
-		let sawDone = false;
-		while (true) {
-			const { done, value } = await reader.read();
-
-			if (done) {
-				// Process any remaining complete events in buffer
-				const parsed = consumeSseEvents(buffer + "\n\n");
-				for (const data of parsed.events) {
-					if (data === "[DONE]") {
-						break;
-					}
-					try {
-						const jsonData = JSON.parse(data);
-						// Handle both Workers AI format (response) and OpenAI format (choices[0].delta.content)
-						let content = "";
-						if (
-							typeof jsonData.response === "string" &&
-							jsonData.response.length > 0
-						) {
-							content = jsonData.response;
-						} else if (jsonData.choices?.[0]?.delta?.content) {
-							content = jsonData.choices[0].delta.content;
-						}
-						if (content) {
-							responseText += content;
-							flushAssistantText();
-						}
-					} catch (e) {
-						console.error("Error parsing SSE data as JSON:", e, data);
-					}
-				}
-				break;
-			}
-
-			// Decode chunk
-			buffer += decoder.decode(value, { stream: true });
-			const parsed = consumeSseEvents(buffer);
-			buffer = parsed.buffer;
-			for (const data of parsed.events) {
+		// Consume one batch of SSE events (used in both streaming and final-flush paths)
+		const consumeEvents = (events) => {
+			for (const data of events) {
 				if (data === "[DONE]") {
 					sawDone = true;
-					buffer = "";
-					break;
+					continue;
 				}
 				try {
 					const jsonData = JSON.parse(data);
@@ -168,20 +217,49 @@ async function sendMessage() {
 					console.error("Error parsing SSE data as JSON:", e, data);
 				}
 			}
+		};
+
+		while (true) {
+			const { done, value } = await reader.read();
+
+			if (done) {
+				// Process any remaining complete events in buffer
+				const parsed = consumeSseEvents(buffer + "\n\n");
+				consumeEvents(parsed.events);
+				break;
+			}
+
+			// Decode chunk
+			buffer += decoder.decode(value, { stream: true });
+			const parsed = consumeSseEvents(buffer);
+			buffer = parsed.buffer;
+			consumeEvents(parsed.events);
+
 			if (sawDone) {
 				break;
 			}
 		}
 
-		// Add completed response to chat history
-		if (responseText.length > 0) {
-			chatHistory.push({ role: "assistant", content: responseText });
+		// If nothing came back, show a friendly message rather than a blank bubble
+		if (responseText.length === 0) {
+			responseText = "(No response received from the model.)";
+			flushAssistantText();
 		}
+
+		// Add completed response to chat history
+		chatHistory.push({ role: "assistant", content: responseText });
 	} catch (error) {
 		console.error("Error:", error);
+
+		// Remove the empty assistant bubble we created so the UI stays clean
+		if (assistantMessageEl && assistantMessageEl.parentNode) {
+			assistantMessageEl.parentNode.removeChild(assistantMessageEl);
+		}
+
+		// Do not persist the failed turn in history
 		addMessageToChat(
 			"assistant",
-			"Sorry, there was an error processing your request.",
+			"Sorry, there was an error processing your request. Please try again.",
 		);
 	} finally {
 		// Hide typing indicator
@@ -201,13 +279,24 @@ async function sendMessage() {
 function addMessageToChat(role, content) {
 	const messageEl = document.createElement("div");
 	messageEl.className = `message ${role}-message`;
-	messageEl.innerHTML = `<p>${content}</p>`;
-	chatMessages.appendChild(messageEl);
 
-	// Scroll to bottom
-	chatMessages.scrollTop = chatMessages.scrollHeight;
+	const p = document.createElement("p");
+	if (role === "assistant") {
+		p.innerHTML = renderMarkdownLite(content);
+	} else {
+		// User input is rendered as plain text — never trust it as HTML
+		p.textContent = content;
+	}
+
+	messageEl.appendChild(p);
+	chatMessages.appendChild(messageEl);
+	scrollToBottom(true);
 }
 
+/**
+ * Parse an SSE buffer into complete events.
+ * Returns the parsed events plus any remaining partial buffer.
+ */
 function consumeSseEvents(buffer) {
 	let normalized = buffer.replace(/\r/g, "");
 	const events = [];
