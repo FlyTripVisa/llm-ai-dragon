@@ -1,102 +1,114 @@
 /**
- * LLM Chat Application Template
- *
- * A simple chat application using Cloudflare Workers AI.
- * This template demonstrates how to implement an LLM-powered chat interface with
- * streaming responses using Server-Sent Events (SSE).
- *
- * @license MIT
+ * Type definitions for the LLM chat application.
  */
-import { Env, ChatMessage } from "./types";
 
-// Model ID for Workers AI model
-// https://developers.cloudflare.com/workers-ai/models/
-const MODEL_ID = "@cf/qwen/qwen3-30b-a3b-fp8";
-
-// Default system prompt
-const SYSTEM_PROMPT =
-	"You are a helpful, friendly assistant. Provide concise and accurate responses.";
-
-export default {
+export interface Env {
 	/**
-	 * Main request handler for the Worker
+	 * Binding for the Workers AI API (routes through AI Gateway "ai_dragon").
 	 */
-	async fetch(
-		request: Request,
-		env: Env,
-		ctx: ExecutionContext,
-	): Promise<Response> {
-		const url = new URL(request.url);
+	AI: Ai;
 
-		// Handle static assets (frontend)
-		if (url.pathname === "/" || !url.pathname.startsWith("/api/")) {
-			return env.ASSETS.fetch(request);
-		}
+	/**
+	 * Binding for AI Search (instance "flytripvisa").
+	 */
+	AI_SEARCH: AiSearchNamespace;
 
-		// API Routes
-		if (url.pathname === "/api/chat") {
-			// Handle POST requests for chat
-			if (request.method === "POST") {
-				return handleChatRequest(request, env);
-			}
+	/**
+	 * Binding for static assets (serves ./public).
+	 */
+	ASSETS: { fetch: (request: Request) => Promise<Response> };
 
-			// Method not allowed for other request types
-			return new Response("Method not allowed", { status: 405 });
-		}
+	/**
+	 * D1 database — primary: flytripvisa-db (has application data).
+	 */
+	DB: D1Database;
 
-		// Handle 404 for unmatched routes
-		return new Response("Not found", { status: 404 });
-	},
-} satisfies ExportedHandler<Env>;
+	/**
+	 * D1 database — secondary: flydb-d1.
+	 */
+	DB2: D1Database;
+
+	/**
+	 * KV namespace — rate limiting, session cache, key-value store.
+	 * (namespace title: "admin-ai")
+	 */
+	KV_BINDING: KVNamespace;
+
+	/**
+	 * R2 bucket — general object storage (flytripvisa-media).
+	 */
+	BUCKET: R2Bucket;
+
+	/**
+	 * R2 bucket — AI chat file attachments (ai-chat).
+	 */
+	AI_CHAT_BUCKET: R2Bucket;
+
+	/**
+	 * Browser Run binding — web browsing, content extraction.
+	 */
+	BROWSER: { fetch: (request: Request | string) => Promise<Response> };
+
+	/**
+	 * Durable Object — persistent AI agent with SQLite-backed conversation history.
+	 */
+	AIAgent: DurableObjectNamespace;
+
+	/**
+	 * Durable Object — per-conversation message history.
+	 */
+	ChatSession: DurableObjectNamespace;
+
+	/**
+	 * Durable Object — WebSocket real-time streaming with hibernation keep-alive.
+	 */
+	RealtimeStream: DurableObjectNamespace;
+
+	/**
+	 * Durable Object — user session and profile management.
+	 */
+	UserSession: DurableObjectNamespace;
+
+	/**
+	 * Durable Object — payment state and webhook handling.
+	 */
+	PaymentProcessor: DurableObjectNamespace;
+
+	// ── Environment variables (from wrangler.jsonc vars) ──────────
+
+	APP_NAME: string;
+	AI_MODEL: string;
+	AI_PROVIDER: string;
+	AI_GATEWAY_ID: string;
+	CF_ACCOUNT_ID: string;
+	APP_DOMAIN: string;
+	APP_URL: string;
+	AI_CHAT_URL: string;
+	ENVIRONMENT: string;
+	ENABLE_STREAMING: string;
+	LOG_LEVEL: string;
+	MAX_HISTORY: string;
+	SYSTEM_PROMPT: string;
+
+	// ── Social platform secrets (optional, via wrangler secret put) ──
+
+	TELEGRAM_BOT_TOKEN?: string;
+	WECHAT_APP_ID?: string;
+	WECHAT_APP_SECRET?: string;
+	WECHAT_TOKEN?: string;
+	WHATSAPP_ACCESS_TOKEN?: string;
+	WHATSAPP_PHONE_NUMBER_ID?: string;
+
+	/**
+	 * Owner authentication (optional, for admin endpoints).
+	 */
+	ADMIN_SECRET?: string;
+}
 
 /**
- * Handles chat API requests
+ * Represents a chat message.
  */
-async function handleChatRequest(
-	request: Request,
-	env: Env,
-): Promise<Response> {
-	try {
-		// Parse JSON request body
-		const { messages = [] } = (await request.json()) as {
-			messages: ChatMessage[];
-		};
-
-		// Add system prompt if not present
-		if (!messages.some((msg) => msg.role === "system")) {
-			messages.unshift({ role: "system", content: SYSTEM_PROMPT });
-		}
-
-		const inputs = {
-			messages,
-			max_tokens: 1024,
-			stream: true,
-		} satisfies AiTextGenerationInput & { stream: true };
-
-		const stream = await env.AI.run<typeof MODEL_ID>(MODEL_ID, inputs, {
-			// Uncomment to use AI Gateway
-			// gateway: {
-			//   id: "https://m.flytripvisa.site/workers-ai/v1/chat/", // Replace with your AI Gateway ID
-			//   skipCache: false,      // Set to true to bypass cache
-			//   cacheTtl: 3600,        // Cache time-to-live in seconds
-			// },
-		});
-
-		return new Response(stream, {
-			headers: {
-				"content-type": "text/event-stream; charset=utf-8",
-				"cache-control": "no-cache",
-				connection: "keep-alive",
-			},
-		});
-	} catch (error) {
-		console.error("Error processing chat request:", error);
-		return new Response(
-			JSON.stringify({ error: "Failed to process request" }),
-			{
-				status: 500,
-				headers: { "content-type": "application/json" },
-			},
-		);
-	}
+export interface ChatMessage {
+	role: "system" | "user" | "assistant";
+	content: string;
 }
