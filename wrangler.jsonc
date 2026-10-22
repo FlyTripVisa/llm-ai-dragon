@@ -1,22 +1,102 @@
-/**
- * For more details on how to configure Wrangler, refer to:
- * https://developers.cloudflare.com/workers/wrangler/configuration/
- */
 {
-	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "llm-ai-dragon",
-	"main": "src/index.ts",
-	"compatibility_date": "2025-10-08",
-	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-	"assets": {
-		"binding": "ASSETS",
-		"directory": "./public"
-	},
-	"observability": {
-		"enabled": true
-	},
-	"ai": {
-		"binding": "AI"
-	},
-	"upload_source_maps": true
+  "$schema": "node_modules/wrangler/config-schema.json",
+
+  "name": "llm-ai-dragon",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-22",
+  "compatibility_flags": ["nodejs_compat"],
+
+  "observability": {
+    "enabled": true,
+    "logs": { "enabled": true }
+  },
+
+  "assets": {
+    "binding": "ASSETS",
+    "directory": "./public",
+    "not_found_handling": "single-page-application"
+  },
+
+  "ai": {
+    "binding": "AI"
+  },
+
+  "ai_search": [
+    {
+      "binding": "AI_SEARCH",
+      "instance_name": "flytripvisa"
+    }
+  ],
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "flytripvisa-db",
+      "database_id": "f274effd-ff6e-4c75-b8a8-4083726232fe"
+    },
+    {
+      "binding": "DB2",
+      "database_name": "flydb-d1",
+      "database_id": "bc449b24-09b3-4ecd-a599-b78d0127f594"
+    }
+  ],
+
+  "kv_namespaces": [
+    {
+      "binding": "KV_BINDING",
+      "id": "2085403b5d774d1bbd333bcb8ea0d80b"
+    }
+  ],
+
+  "r2_buckets": [
+    { "binding": "BUCKET", "bucket_name": "flytripvisa-media" },
+    { "binding": "AI_CHAT_BUCKET", "bucket_name": "ai-chat" }
+  ],
+
+  "browser": {
+    "binding": "BROWSER"
+  },
+
+  "durable_objects": {
+    "bindings": [
+      { "name": "AIAgent", "class_name": "AIAgent" },
+      { "name": "ChatSession", "class_name": "ChatSession" },
+      { "name": "RealtimeStream", "class_name": "RealtimeStream" },
+      { "name": "UserSession", "class_name": "UserSession" },
+      { "name": "PaymentProcessor", "class_name": "PaymentProcessor" }
+    ]
+  },
+
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_classes": [
+        "AIAgent",
+        "ChatSession",
+        "RealtimeStream",
+        "UserSession",
+        "PaymentProcessor"
+        "VisaProcessor"
+      ]
+    }
+  ],
+
+  "vars": {
+    "APP_NAME": "FlyTripVisa AI",
+    "AI_MODEL": "@cf/qwen/qwen3-30b-a3b-fp8",
+    "AI_PROVIDER": "workers-ai",
+    "AI_GATEWAY_ID": "ai_dragon",
+    "CF_ACCOUNT_ID": "b73b80fa62deef032d3c08248cf2f30b",
+    "APP_DOMAIN": "flytripvisa.site",
+    "APP_URL": "https://flytripvisa.site",
+    "MINIPROGRAM_URL": "https://mini.flytripvisa.site",
+    "AI_CHAT_URL": "https://chat.flytripvisa.site",
+    "ENVIRONMENT": "production",
+    "ENABLE_STREAMING": "true",
+    "LOG_LEVEL": "info",
+    "MAX_HISTORY": "50",
+    "SYSTEM_PROMPT": "You are FlyTripVisa AI — a helpful, professional travel visa assistant."
+  },
+
+  "upload_source_maps": true
 }
